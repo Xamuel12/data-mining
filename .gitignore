@@ -56,3 +56,9 @@ Thumbs.db
 *.log
 *.err
 
+# Temp files
+*_result.txt
+*_error.txt
+git_*.txt
+npx_*.txt
+
