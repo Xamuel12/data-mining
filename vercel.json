@@ -8,5 +8,8 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "app.py" }
-  ]
+  ],
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
 }
