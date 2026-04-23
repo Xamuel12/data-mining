@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, redirect, url_for, request, flash, Response
+from flask import Flask, render_template, redirect, url_for, request, flash, Response, jsonify
 
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -7,14 +7,31 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import pandas as pd
 from sklearn.cluster import KMeans
 
+# Load environment variables from .env file for local development
+from dotenv import load_dotenv
+load_dotenv()
+
 app = Flask(__name__)
 
-# Configuration for Online Database (Postgres) or local SQLite
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key')
+# =============================================================================
+# PRODUCTION CONFIGURATION
+# =============================================================================
+# Secret key - MUST be set via environment variable in production
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+if not app.config['SECRET_KEY']:
+    raise ValueError("SECRET_KEY environment variable is not set!")
+
+# Database configuration - supports PostgreSQL (production) and SQLite (local)
 database_url = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
+# Fix for Heroku/Vercel postgres:// vs postgresql://
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,  # Verify connections before using them
+    'pool_recycle': 300,    # Recycle connections after 5 minutes
+}
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
@@ -174,9 +191,33 @@ def logout():
     return redirect(url_for('index'))
 
 
-# Initialize database tables on import (for Vercel serverless)
-with app.app_context():
-    db.create_all()
+# =============================================================================
+# HEALTH CHECK ENDPOINT (for monitoring)
+# =============================================================================
+@app.route('/health')
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'service': 'CultureExplore API',
+        'database': 'connected' if db else 'disconnected'
+    }), 200
+
+
+# =============================================================================
+# DATABASE INITIALIZATION
+# =============================================================================
+def init_db():
+    """Initialize database tables with error handling."""
+    try:
+        with app.app_context():
+            db.create_all()
+            print("✅ Database tables initialized successfully.")
+    except Exception as e:
+        print(f"⚠️ Database initialization warning: {e}")
+
+
+# Initialize on import (for serverless environments like Vercel)
+init_db()
 
 if __name__ == '__main__':
     app.run(debug=True)
