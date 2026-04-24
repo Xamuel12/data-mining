@@ -11,18 +11,43 @@ from sklearn.cluster import KMeans
 from dotenv import load_dotenv
 load_dotenv()
 
+# =============================================================================
+# ENVIRONMENT VARIABLES IMPORT
+# =============================================================================
+SECRET_KEY = os.environ.get('SECRET_KEY')
+DATABASE_URL = os.environ.get('DATABASE_URL')
+FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
+PORT = int(os.environ.get('PORT', 5000))
+
+# Validate required environment variables in production
+if FLASK_ENV == 'production':
+    if not SECRET_KEY:
+        raise ValueError(
+            "SECRET_KEY environment variable is required in production. "
+            "Please set it in your deployment platform dashboard."
+        )
+    if not DATABASE_URL:
+        raise ValueError(
+            "DATABASE_URL environment variable is required in production. "
+            "Please set it in your deployment platform dashboard."
+        )
+
+# Use fallbacks for local development
+if not SECRET_KEY:
+    SECRET_KEY = 'dev-secret-key-change-in-production'
+if not DATABASE_URL:
+    DATABASE_URL = 'sqlite:///users.db'
+
 app = Flask(__name__)
 
 # =============================================================================
 # PRODUCTION CONFIGURATION
 # =============================================================================
-# Secret key - MUST be set via environment variable in production
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
-if not app.config['SECRET_KEY']:
-    raise ValueError("SECRET_KEY environment variable is not set!")
+# Secret key - uses environment variable in production, fallback for local dev
+app.config['SECRET_KEY'] = SECRET_KEY
 
 # Database configuration - supports PostgreSQL (production) and SQLite (local)
-database_url = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
+database_url = DATABASE_URL
 # Fix for Heroku/Vercel postgres:// vs postgresql://
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
@@ -220,4 +245,5 @@ def init_db():
 init_db()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    debug_mode = FLASK_ENV != 'production'
+    app.run(host='0.0.0.0', port=PORT, debug=debug_mode)
