@@ -1,9 +1,11 @@
 import os
+import sys
 from flask import Flask, render_template, redirect, url_for, request, flash, Response, jsonify
 
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import text
 import pandas as pd
 from sklearn.cluster import KMeans
 
@@ -19,6 +21,9 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
 PORT = int(os.environ.get('PORT', 5000))
 
+# Detect Vercel / serverless environment
+IS_VERCEL = os.environ.get('VERCEL') == '1' or os.path.exists('/vercel')
+
 # Validate required environment variables in production
 if FLASK_ENV == 'production':
     if not SECRET_KEY:
@@ -26,17 +31,16 @@ if FLASK_ENV == 'production':
             "SECRET_KEY environment variable is required in production. "
             "Please set it in your deployment platform dashboard."
         )
-    if not DATABASE_URL:
-        raise ValueError(
-            "DATABASE_URL environment variable is required in production. "
-            "Please set it in your deployment platform dashboard."
-        )
 
 # Use fallbacks for local development
 if not SECRET_KEY:
     SECRET_KEY = 'dev-secret-key-change-in-production'
 if not DATABASE_URL:
-    DATABASE_URL = 'sqlite:///users.db'
+    # On serverless, only /tmp is writable
+    if IS_VERCEL:
+        DATABASE_URL = 'sqlite:////tmp/users.db'
+    else:
+        DATABASE_URL = 'sqlite:///users.db'
 
 app = Flask(__name__)
 
@@ -49,7 +53,7 @@ app.config['SECRET_KEY'] = SECRET_KEY
 # Database configuration - supports PostgreSQL (production) and SQLite (local)
 database_url = DATABASE_URL
 # Fix for Heroku/Vercel postgres:// vs postgresql://
-if database_url.startswith("postgres://"):
+if database_url and database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -90,42 +94,76 @@ def index():
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        first_name = request.form.get('first_name')
-        last_name = request.form.get('last_name')
-        age = request.form.get('age')
-        occupation = request.form.get('occupation')
-        username = request.form.get('username')
-        password = request.form.get('password')
-        confirm_password = request.form.get('confirm_password')
+        first_name = request.form.get('first_name', '').strip()
+        last_name = request.form.get('last_name', '').strip()
+        age = request.form.get('age', '').strip()
+        occupation = request.form.get('occupation', '').strip()
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
+
+        # Validate required fields
+        if not all([first_name, last_name, age, occupation, username, password]):
+            flash('All fields are required!')
+            return render_template('signup.html')
 
         if password != confirm_password:
             flash('Passwords do not match!')
             return render_template('signup.html')
 
-        if User.query.filter_by(username=username).first():
-            flash('Username already exists!')
+        try:
+            # Check if username already exists
+            existing_user = User.query.filter_by(username=username).first()
+            if existing_user:
+                flash('Username already exists!')
+                return render_template('signup.html')
+
+            hashed_password = generate_password_hash(password)
+            new_user = User(
+                first_name=first_name,
+                last_name=last_name,
+                age=int(age),
+                occupation=occupation,
+                username=username,
+                password=hashed_password
+            )
+            db.session.add(new_user)
+            db.session.commit()
+            flash('Account created! Please login.')
+            return redirect(url_for('login'))
+        except Exception as e:
+            db.session.rollback()
+            import traceback
+            print(f"SIGNUP ERROR: {e}")
+            print(traceback.format_exc())
+            flash(f'An error occurred while creating your account. Please try again.')
             return render_template('signup.html')
 
-        hashed_password = generate_password_hash(password)
-        new_user = User(first_name=first_name, last_name=last_name, age=int(
-            age), occupation=occupation, username=username, password=hashed_password)
-        db.session.add(new_user)
-        db.session.commit()
-        flash('Account created! Please login.')
-        return redirect(url_for('login'))
     return render_template('signup.html')
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password, password):
-            login_user(user)
-            return redirect(url_for('index'))
-        flash('Login failed. Check your credentials.')
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+
+        if not username or not password:
+            flash('Username and password are required!')
+            return render_template('login.html')
+
+        try:
+            user = User.query.filter_by(username=username).first()
+            if user and check_password_hash(user.password, password):
+                login_user(user)
+                return redirect(url_for('index'))
+            flash('Login failed. Check your credentials.')
+        except Exception as e:
+            import traceback
+            print(f"LOGIN ERROR: {e}")
+            print(traceback.format_exc())
+            flash('An error occurred during login. Please try again.')
+
     return render_template('login.html')
 
 
@@ -184,6 +222,9 @@ def data_mining():
                                algorithm=algorithm,
                                algorithms=['kmeans', 'dbscan', 'hierarchical'])
     except Exception as e:
+        import traceback
+        print(f"DATA MINING ERROR: {e}")
+        print(traceback.format_exc())
         return render_template('data_mining.html', error=str(e))
 
 
@@ -221,10 +262,16 @@ def logout():
 # =============================================================================
 @app.route('/health')
 def health_check():
+    db_status = 'unknown'
+    try:
+        db.session.execute(text('SELECT 1'))
+        db_status = 'connected'
+    except Exception as e:
+        db_status = f'error: {str(e)}'
     return jsonify({
         'status': 'healthy',
         'service': 'CultureExplore API',
-        'database': 'connected' if db else 'disconnected'
+        'database': db_status
     }), 200
 
 
@@ -238,7 +285,9 @@ def init_db():
             db.create_all()
             print("✅ Database tables initialized successfully.")
     except Exception as e:
+        import traceback
         print(f"⚠️ Database initialization warning: {e}")
+        print(traceback.format_exc())
 
 
 # Initialize on import (for serverless environments like Vercel)
