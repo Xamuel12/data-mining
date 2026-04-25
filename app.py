@@ -25,42 +25,62 @@ PORT = int(os.environ.get('PORT', 5000))
 # Detect Vercel / serverless environment
 IS_VERCEL = os.environ.get('VERCEL') == '1' or os.path.exists('/vercel')
 
-# Validate required environment variables in production
-if FLASK_ENV == 'production':
-    if not SECRET_KEY:
-        raise ValueError(
-            "SECRET_KEY environment variable is required in production. "
-            "Please set it in your deployment platform dashboard."
-        )
-
 # Use fallbacks for local development
 if not SECRET_KEY:
     SECRET_KEY = 'dev-secret-key-change-in-production'
-if not DATABASE_URL:
-    # On serverless, only /tmp is writable
-    if IS_VERCEL:
-        DATABASE_URL = 'sqlite:////tmp/users.db'
-    else:
-        DATABASE_URL = 'sqlite:///users.db'
 
 app = Flask(__name__)
-
-# =============================================================================
-# PRODUCTION CONFIGURATION
-# =============================================================================
-# Secret key - uses environment variable in production, fallback for local dev
 app.config['SECRET_KEY'] = SECRET_KEY
-
-# Database configuration - supports PostgreSQL (production) and SQLite (local)
-database_url = DATABASE_URL
-# Fix for Heroku/Vercel postgres:// vs postgresql://
-if database_url and database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
-app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# =============================================================================
+# DATABASE SETUP - Auto fallback to SQLite if PostgreSQL fails
+# =============================================================================
+
+
+def setup_database():
+    """Try PostgreSQL first, fall back to SQLite if it fails."""
+    database_url = DATABASE_URL
+
+    if database_url:
+        # Fix for Heroku/Vercel postgres:// vs postgresql://
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace(
+                "postgres://", "postgresql://", 1)
+
+        # Test the connection
+        try:
+            import psycopg2
+            conn = psycopg2.connect(database_url, connect_timeout=5)
+            conn.close()
+            print("PostgreSQL connection OK")
+            return database_url, "postgresql"
+        except Exception as e:
+            print(f"PostgreSQL failed: {e}")
+            print("Falling back to SQLite...")
+
+    # Fallback to SQLite
+    if IS_VERCEL:
+        sqlite_path = 'sqlite:////tmp/users.db'
+    else:
+        sqlite_path = 'sqlite:///users.db'
+
+    print(f"Using SQLite: {sqlite_path}")
+    return sqlite_path, "sqlite"
+
+
+database_url, db_type = setup_database()
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+# SSL for Supabase/Neon
+connect_args = {}
+if database_url and ('supabase' in database_url or 'neon' in database_url):
+    connect_args = {'sslmode': 'require'}
+
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,  # Verify connections before using them
-    'pool_recycle': 300,    # Recycle connections after 5 minutes
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+    'connect_args': connect_args,
 }
 
 db = SQLAlchemy(app)
@@ -84,7 +104,9 @@ class User(UserMixin, db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# Routes
+# =============================================================================
+# ROUTES
+# =============================================================================
 
 
 @app.route('/')
@@ -103,7 +125,6 @@ def signup():
         password = request.form.get('password', '')
         confirm_password = request.form.get('confirm_password', '')
 
-        # Validate required fields
         if not all([first_name, last_name, age, occupation, username, password]):
             flash('All fields are required!')
             return render_template('signup.html')
@@ -113,7 +134,6 @@ def signup():
             return render_template('signup.html')
 
         try:
-            # Check if username already exists
             existing_user = User.query.filter_by(username=username).first()
             if existing_user:
                 flash('Username already exists!')
@@ -137,7 +157,7 @@ def signup():
             print(f"SIGNUP ERROR: {e}")
             traceback.print_exc()
             error_msg = str(e)
-            flash(f'DB Error: {error_msg[:200]}')
+            flash(f'Error: {error_msg[:200]}')
             return render_template('signup.html')
 
     return render_template('signup.html')
@@ -185,7 +205,6 @@ def data_mining():
         if df_encoded.empty:
             return render_template('data_mining.html', error="No clean data for analysis")
 
-        # Algorithm selection
         if algorithm == 'kmeans':
             model = KMeans(n_clusters=3, n_init=10, random_state=42)
         elif algorithm == 'dbscan':
@@ -200,10 +219,8 @@ def data_mining():
         clusters = model.fit_predict(df_encoded)
         df['Cluster'] = clusters
 
-        # Cluster stats
         cluster_counts = df['Cluster'].value_counts().sort_index().to_dict()
 
-        # Pagination
         start_idx = (page - 1) * per_page
         end_idx = start_idx + per_page
         paginated_df = df.iloc[start_idx:end_idx]
@@ -256,15 +273,12 @@ def logout():
     return redirect(url_for('index'))
 
 
-# =============================================================================
-# HEALTH CHECK ENDPOINT (for monitoring)
-# =============================================================================
 @app.route('/health')
 def health_check():
     db_status = 'unknown'
     try:
         db.session.execute(text('SELECT 1'))
-        db_status = 'connected'
+        db_status = f'connected ({db_type})'
     except Exception as e:
         db_status = f'error: {str(e)}'
     return jsonify({
@@ -274,11 +288,7 @@ def health_check():
     }), 200
 
 
-# =============================================================================
-# DATABASE INITIALIZATION
-# =============================================================================
 def init_db():
-    """Initialize database tables with error handling."""
     try:
         with app.app_context():
             db.create_all()
@@ -288,7 +298,6 @@ def init_db():
         traceback.print_exc()
 
 
-# Initialize on import (for serverless environments like Vercel)
 init_db()
 
 if __name__ == '__main__':
