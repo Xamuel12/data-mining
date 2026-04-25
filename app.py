@@ -105,7 +105,7 @@ class User(UserMixin, db.Model):
     age = db.Column(db.Integer, nullable=False)
     occupation = db.Column(db.String(100), nullable=False)
     username = db.Column(db.String(150), unique=True, nullable=False)
-    password = db.Column(db.String(150), nullable=False)
+    password = db.Column(db.String(500), nullable=False)
 
 
 @login_manager.user_loader
