@@ -69,6 +69,7 @@ def setup_database():
     # Fallback to SQLite
     if IS_VERCEL:
         sqlite_path = 'sqlite:////tmp/users.db'
+        print("WARNING: SQLite on Vercel loses data on every page reload!")
     else:
         sqlite_path = 'sqlite:///users.db'
 
