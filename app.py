@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from flask import Flask, render_template, redirect, url_for, request, flash, Response, jsonify
 
 from flask_sqlalchemy import SQLAlchemy
@@ -133,10 +134,10 @@ def signup():
             return redirect(url_for('login'))
         except Exception as e:
             db.session.rollback()
-            import traceback
             print(f"SIGNUP ERROR: {e}")
-            print(traceback.format_exc())
-            flash(f'An error occurred while creating your account. Please try again.')
+            traceback.print_exc()
+            error_msg = str(e)
+            flash(f'DB Error: {error_msg[:200]}')
             return render_template('signup.html')
 
     return render_template('signup.html')
@@ -159,9 +160,8 @@ def login():
                 return redirect(url_for('index'))
             flash('Login failed. Check your credentials.')
         except Exception as e:
-            import traceback
             print(f"LOGIN ERROR: {e}")
-            print(traceback.format_exc())
+            traceback.print_exc()
             flash('An error occurred during login. Please try again.')
 
     return render_template('login.html')
@@ -222,9 +222,8 @@ def data_mining():
                                algorithm=algorithm,
                                algorithms=['kmeans', 'dbscan', 'hierarchical'])
     except Exception as e:
-        import traceback
         print(f"DATA MINING ERROR: {e}")
-        print(traceback.format_exc())
+        traceback.print_exc()
         return render_template('data_mining.html', error=str(e))
 
 
@@ -283,11 +282,10 @@ def init_db():
     try:
         with app.app_context():
             db.create_all()
-            print("✅ Database tables initialized successfully.")
+            print("Database tables initialized successfully.")
     except Exception as e:
-        import traceback
-        print(f"⚠️ Database initialization warning: {e}")
-        print(traceback.format_exc())
+        print(f"Database initialization warning: {e}")
+        traceback.print_exc()
 
 
 # Initialize on import (for serverless environments like Vercel)
