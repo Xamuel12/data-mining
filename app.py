@@ -30,7 +30,14 @@ if not SECRET_KEY:
     SECRET_KEY = 'dev-secret-key-change-in-production'
 
 app = Flask(__name__)
+
+# Session configuration for HTTPS/serverless environments
 app.config['SECRET_KEY'] = SECRET_KEY
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # =============================================================================
@@ -176,7 +183,7 @@ def login():
         try:
             user = User.query.filter_by(username=username).first()
             if user and check_password_hash(user.password, password):
-                login_user(user)
+                login_user(user, remember=True)
                 return redirect(url_for('index'))
             flash('Login failed. Check your credentials.')
         except Exception as e:
