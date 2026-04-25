@@ -80,9 +80,9 @@ def setup_database():
 database_url, db_type = setup_database()
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 
-# SSL for Supabase/Neon
+# SSL for managed PostgreSQL providers
 connect_args = {}
-if database_url and ('supabase' in database_url or 'neon' in database_url):
+if database_url and any(host in database_url for host in ['supabase', 'neon', 'render', 'aws']):
     connect_args = {'sslmode': 'require'}
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
